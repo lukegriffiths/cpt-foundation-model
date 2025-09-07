@@ -1,0 +1,29 @@
+# configs/dataset_A.yaml
+
+# --- Paths ---
+data_paths:
+  input_file: 'data/raw/Database_CPT_PremstallerGeotechnik/CPT_PremstallerGeotechnik_revised.csv'
+  processed_dir: 'data/processed/dataset_A'
+  scaler_path: 'data/processed/dataset_A/scaler.joblib'
+  model_save_path: 'models/foundation_model_A.pth'
+
+# --- Feature Engineering ---
+# Maps your generic feature names to the specific column names in this dataset's CSV
+feature_mapping:
+  qc: 'qc (MPa)'
+  fs: 'fs (kPa)'
+  u2: 'u2 (kPa)'
+  soil_class: 'EN_ISO_14688_classes'
+
+# --- Model Hyperparameters ---
+model_params:
+  num_features: 25 # 3 numerical + 22 soil classes (for example)
+  model_dim: 128
+  num_heads: 8
+  num_layers: 6
+
+# --- Training Hyperparameters ---
+training_params:
+  batch_size: 32
+  learning_rate: 0.0001
+  num_epochs: 50
