@@ -1,0 +1,28 @@
+# Conda environment configuration for the CPT Foundation Model project
+# used with `conda env create -f environment.yml`
+name: cpt-fm
+
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Core dependencies
+  - python=3.10
+  - pytorch
+  - torchvision
+  - torchaudio
+  - cudatoolkit=11.8 # Or the version compatible with your NVIDIA driver
+
+  # Data handling and processing
+  - pandas
+  - numpy
+  - scikit-learn
+
+  # For notebooks and experimentation
+  - jupyter
+  - notebook
+
+  # Optional but recommended for Transformer models
+  - transformers
