@@ -1,3 +1,6 @@
 data/raw
 data/processed
 data/scaler.joblib
+*.pyc
+__pycache__/
+models

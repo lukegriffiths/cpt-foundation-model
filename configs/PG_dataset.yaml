@@ -3,9 +3,9 @@
 # --- Paths ---
 data_paths:
   input_file: 'data/raw/Database_CPT_PremstallerGeotechnik/CPT_PremstallerGeotechnik_revised.csv'
-  processed_dir: 'data/processed/dataset_A'
-  scaler_path: 'data/processed/dataset_A/scaler.joblib'
-  model_save_path: 'models/foundation_model_A.pth'
+  processed_dir: 'data/processed/PG'
+  scaler_path: 'data/processed/PG/scaler.joblib'
+  model_save_path: 'models/foundation_model_PG.pth'
 
 # --- Feature Engineering ---
 # Maps your generic feature names to the specific column names in this dataset's CSV
@@ -13,14 +13,14 @@ feature_mapping:
   qc: 'qc (MPa)'
   fs: 'fs (kPa)'
   u2: 'u2 (kPa)'
-  soil_class: 'EN_ISO_14688_classes'
+  soil_class: 'Oberhollenzer_classes'
 
 # --- Model Hyperparameters ---
 model_params:
-  num_features: 25 # 3 numerical + 22 soil classes (for example)
+  num_features: 12 # 3 numerical + 22 soil classes (for example)
   model_dim: 128
   num_heads: 8
-  num_layers: 6
+  num_layers: 4 # 4-8 is good range
 
 # --- Training Hyperparameters ---
 training_params:

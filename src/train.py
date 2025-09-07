@@ -1,69 +1,141 @@
+import os
+import yaml
+import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-# Import your custom classes
+# Import your custom classes from other files in the 'src' directory
 from data_loader import CPTTensorDataset, collate_cpts
 from model import CPTFoundationModel
 
-# --- Configuration ---
-PROCESSED_DIR = 'data/processed'
-MODEL_SAVE_PATH = 'cpt_foundation_model.pth'
-NUM_FEATURES = 25 # IMPORTANT: Update this to 3 + number of your soil classes
-BATCH_SIZE = 32
-LEARNING_RATE = 1e-4
-NUM_EPOCHS = 50
-MASK_RATIO = 0.15
+def train(config: dict):
+    """
+    Main function to run the model training pipeline.
 
-# --- Setup ---
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+    Args:
+        config (dict): A dictionary containing all configuration parameters.
+    """
+    # --- 1. Setup and Configuration ---
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
-# 1. Initialize Dataset and DataLoader
-dataset = CPTTensorDataset(processed_dir=PROCESSED_DIR)
-data_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_cpts)
+    # Extract paths and create directories
+    paths = config['data_paths']
+    processed_dir = paths['processed_dir']
+    model_save_path = paths['model_save_path']
+    os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
 
-# 2. Initialize Model, Optimizer, and Loss Function
-model = CPTFoundationModel(num_features=NUM_FEATURES).to(device)
-optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-loss_fn = nn.MSELoss()
-
-# --- Training Loop ---
-for epoch in range(NUM_EPOCHS):
-    model.train()
-    total_loss = 0
+    # Extract training and model hyperparameters
+    train_params = config['training_params']
+    model_params = config['model_params']
     
-    for batch, attention_mask in data_loader:
-        batch = batch.to(device)
-        attention_mask = attention_mask.to(device)
-        
-        # --- Masked Modeling Task ---
-        # Create a corrupted version of the input
-        corrupted_batch = batch.clone()
-        # Probability mask for masking tokens
-        prob_mask = torch.rand(batch.shape[:2], device=device)
-        # Determine which tokens to mask (must be real data, not padding)
-        masking_condition = (prob_mask < MASK_RATIO) & (attention_mask == 1)
-        corrupted_batch[masking_condition] = 0.0 # Or a special [MASK] token value
+    batch_size = train_params['batch_size']
+    learning_rate = train_params['learning_rate']
+    num_epochs = train_params['num_epochs']
+    mask_ratio = train_params.get('mask_ratio', 0.15) # Default to 0.15 if not specified
 
-        # --- Forward Pass ---
-        optimizer.zero_grad()
-        predictions = model(corrupted_batch, attention_mask)
-        
-        # --- Loss Calculation ---
-        # IMPORTANT: Calculate loss ONLY on the values that were masked
-        loss = loss_fn(predictions[masking_condition], batch[masking_condition])
-        
-        # --- Backward Pass ---
-        loss.backward()
-        optimizer.step()
-        
-        total_loss += loss.item()
-        
-    avg_loss = total_loss / len(data_loader)
-    print(f"Epoch {epoch+1}/{NUM_EPOCHS}, Average Loss: {avg_loss:.6f}")
+    # --- 2. Data Loading ---
+    print(f"Loading data from '{processed_dir}'...")
+    dataset = CPTTensorDataset(processed_dir=processed_dir)
+    data_loader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        collate_fn=collate_cpts
+    )
+    print(f"Found {len(dataset)} CPT traces.")
 
-    # Save a checkpoint after each epoch
-    torch.save(model.state_dict(), MODEL_SAVE_PATH)
+    # --- 3. Model Initialization ---
+    model = CPTFoundationModel(
+        num_features=model_params['num_features'],
+        model_dim=model_params['model_dim'],
+        num_heads=model_params['num_heads'],
+        num_layers=model_params['num_layers']
+    ).to(device)
 
-print("Training complete. Model saved.")
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    loss_fn = nn.MSELoss()
+
+    print("Starting training...")
+    # --- 4. Training Loop ---
+    for epoch in range(num_epochs):
+        model.train()
+        total_loss = 0
+        
+        # Use tqdm for a progress bar
+        pbar = tqdm(data_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        
+        for batch, attention_mask in pbar:
+            batch = batch.to(device)
+            attention_mask = attention_mask.to(device)
+            
+            # --- Masked Modeling Task ---
+            # Create a corrupted version of the input batch
+            corrupted_batch = batch.clone()
+            
+            # Create a probability tensor to decide which tokens to mask
+            prob_mask = torch.rand(batch.shape[:2], device=device)
+            
+            # Determine masking condition: must be a real data point (not padding)
+            # and fall under the random probability threshold.
+            masking_condition = (prob_mask < mask_ratio) & (attention_mask == 1)
+            
+            # Apply the mask. Here we set masked values to 0.0
+            # Another option could be a learned [MASK] embedding.
+            corrupted_batch[masking_condition] = 0.0
+
+            # --- Forward Pass ---
+            optimizer.zero_grad()
+            predictions = model(corrupted_batch, attention_mask)
+            
+            # --- Loss Calculation ---
+            # IMPORTANT: Calculate loss ONLY on the values that were masked.
+            # This focuses the model on the task of "filling in the blanks".
+            loss = loss_fn(predictions[masking_condition], batch[masking_condition])
+            
+            # --- Backward Pass ---
+            if torch.isfinite(loss): # Safety check for stable training
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            
+            pbar.set_postfix({'loss': loss.item()})
+        
+        avg_loss = total_loss / len(data_loader)
+        print(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.6f}")
+
+        # Save a model checkpoint after each epoch
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_loss,
+        }, model_save_path)
+
+    print(f"\nTraining complete. Final model saved to '{model_save_path}'")
+
+if __name__ == '__main__':
+    # Set up argument parser to read the config file path from the command line
+    # example: python src/train.py --config configs/PG_dataset.yaml
+    
+    parser = argparse.ArgumentParser(description="Train a CPT Foundation Model.")
+    parser.add_argument('--config', type=str, required=True,
+                        help="Path to the YAML configuration file.")
+    args = parser.parse_args()
+
+    # Load the YAML configuration file
+    try:
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+        print("Configuration file loaded successfully.")
+    except FileNotFoundError:
+        print(f"Error: Configuration file not found at '{args.config}'")
+        exit()
+    except Exception as e:
+        print(f"Error loading configuration file: {e}")
+        exit()
+    
+    # Start the training process
+    train(config)
