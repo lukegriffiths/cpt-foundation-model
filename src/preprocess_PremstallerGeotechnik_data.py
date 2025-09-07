@@ -10,7 +10,7 @@ import joblib
 INPUT_FILE = 'data/raw/Database_CPT_PremstallerGeotechnik/CPT_PremstallerGeotechnik_revised.csv'
 OUTPUT_DIR = 'data/processed'
 SCALER_PATH = 'data/scaler.joblib'
-SOIL_CLASS_COLUMN = 'EN_ISO_14688_classes'
+SOIL_CLASS_COLUMN = 'Oberhollenzer_classes'
 
 # Define the numerical feature columns to be used from the CSV
 NUMERICAL_FEATURES = {
