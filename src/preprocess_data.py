@@ -23,7 +23,6 @@ def load_and_group_data(file_path: str) -> tuple[pd.DataFrame | None, dict | Non
     
     print(f"Found {len(cpt_dfs)} unique CPT traces.")
     return df, cpt_dfs
-
 def preprocess_cpts(cpt_dict: dict, all_soil_classes: list, feature_mapping: dict) -> dict:
     """Performs unit conversion, one-hot encodes soil classes, and combines features."""
     print("Preprocessing CPTs (unit conversion and one-hot encoding)...")
@@ -40,6 +39,19 @@ def preprocess_cpts(cpt_dict: dict, all_soil_classes: list, feature_mapping: dic
     for cpt_id, df in tqdm(cpt_dict.items()):
         # --- Process Numerical Features ---
         numerical_df = df[numerical_cols_original].copy()
+        
+        # --- FIX: Force columns to be numeric, coercing errors to NaN ---
+        for col in numerical_cols_original:
+            numerical_df[col] = pd.to_numeric(numerical_df[col], errors='coerce')
+        
+        # --- FIX: Fill any resulting NaN values (e.g., with the median) ---
+        # It's better to fill NaN *before* scaling and unit conversion
+        for col in numerical_cols_original:
+            if numerical_df[col].isnull().any():
+                median_val = numerical_df[col].median()
+                numerical_df[col].fillna(median_val, inplace=True)
+        
+        # --- Continue with existing logic ---
         numerical_df.rename(columns={qc_col: 'qc', fs_col: 'fs', u2_col: 'u2'}, inplace=True)
         
         # Specific transformation: Convert qc from MPa to kPa
@@ -52,7 +64,8 @@ def preprocess_cpts(cpt_dict: dict, all_soil_classes: list, feature_mapping: dic
         one_hot_df = pd.get_dummies(soil_class_cat, prefix='soil')
         
         # --- Combine Features ---
-        combined_df = pd.concat([numerical_df, one_hot_df.reset_index(drop=True)], axis=1)
+        # Ensure indices are aligned before concatenating
+        combined_df = pd.concat([numerical_df.reset_index(drop=True), one_hot_df.reset_index(drop=True)], axis=1)
         processed_cpts[cpt_id] = combined_df
         
     return processed_cpts
@@ -109,12 +122,31 @@ def main(config: dict):
     print("\nData processing complete.")
 
 if __name__ == '__main__':
-    # example usage: python src/preprocess_data.py --config configs/PG_dataset.yaml
+    # --- Define the default configuration file to use if none is provided ---
+    DEFAULT_CONFIG_PATH = 'configs/PG_dataset.yaml'
+
     parser = argparse.ArgumentParser(description="Preprocess CPT data using a config file.")
-    parser.add_argument('--config', type=str, required=True, help="Path to the YAML configuration file.")
+    
+    # --- Make the --config argument optional and provide a default value ---
+    parser.add_argument(
+        '--config', 
+        type=str, 
+        default=DEFAULT_CONFIG_PATH, 
+        help=f"Path to the YAML configuration file. Defaults to '{DEFAULT_CONFIG_PATH}'."
+    )
     args = parser.parse_args()
 
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
+    # --- Load the configuration file ---
+    try:
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+        print(f"Using configuration from: {args.config}")
+    except FileNotFoundError:
+        print(f"Error: Configuration file not found at '{args.config}'")
+        exit()
+    except Exception as e:
+        print(f"Error loading or parsing configuration file: {e}")
+        exit()
     
+    # --- Run the main function ---
     main(config)

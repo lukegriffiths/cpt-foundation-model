@@ -24,6 +24,6 @@ model_params:
 
 # --- Training Hyperparameters ---
 training_params:
-  batch_size: 32
+  batch_size: 4 # was 32, adjusted to use less RAM
   learning_rate: 0.0001
   num_epochs: 50
