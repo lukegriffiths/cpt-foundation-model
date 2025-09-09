@@ -3,14 +3,14 @@ import yaml
 import argparse
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# Import your custom classes from other files in the 'src' directory
-from data_loader import CPTTensorDataset, collate_cpts
+# Import the new DataModule
+from data_utils import CPTDataModule 
 from model import CPTFoundationModel
 
-from torch.cuda.amp import GradScaler, autocast
+from torch.cuda.amp import autocast
+from torch.cuda.amp.grad_scaler import GradScaler
 
 
 def train(config: dict):
@@ -26,7 +26,6 @@ def train(config: dict):
 
     # Extract paths and create directories
     paths = config['data_paths']
-    processed_dir = paths['processed_dir']
     model_save_path = paths['model_save_path']
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
 
@@ -34,21 +33,20 @@ def train(config: dict):
     train_params = config['training_params']
     model_params = config['model_params']
     
-    batch_size = train_params['batch_size']
     learning_rate = train_params['learning_rate']
     num_epochs = train_params['num_epochs']
     mask_ratio = train_params.get('mask_ratio', 0.15) # Default to 0.15 if not specified
 
-    # --- 2. Data Loading ---
-    print(f"Loading data from '{processed_dir}'...")
-    dataset = CPTTensorDataset(processed_dir=processed_dir)
-    data_loader = DataLoader(
-        dataset, 
-        batch_size=batch_size, 
-        shuffle=True, 
-        collate_fn=collate_cpts
-    )
-    print(f"Found {len(dataset)} CPT traces.")
+    # --- 2. Data Loading (now much cleaner) ---
+    print("Setting up data module...")
+    data_module = CPTDataModule(config)
+    data_module.setup() # This will preprocess if necessary and setup all splits
+    
+    # Get DataLoaders for train and validation
+    train_loader = data_module.get_dataloader(stage='train', shuffle=True)
+    val_loader = data_module.get_dataloader(stage='val', shuffle=False)
+    
+    print("Data loading complete.")
 
     # --- 3. Model Initialization ---
     model = CPTFoundationModel(
@@ -69,7 +67,7 @@ def train(config: dict):
         total_loss = 0
         
         # Use tqdm for a progress bar
-        pbar = tqdm(data_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
         
         for batch, attention_mask in pbar:
             batch = batch.to(device)
@@ -88,10 +86,11 @@ def train(config: dict):
 
             # Inside your training loop, right after creating masking_condition
             num_masked = masking_condition.sum().item()
-            print(f"Number of masked tokens in this batch: {num_masked}")
+            # print(f"Number of masked tokens in this batch: {num_masked}")
 
             if num_masked == 0:
-                print("Warning: No tokens were masked!")
+                # print("Warning: No tokens were masked!")
+                continue
             
             # Apply the mask. Here we set masked values to 0.0
             # Another option could be a learned [MASK] embedding.
@@ -122,7 +121,7 @@ def train(config: dict):
             
             pbar.set_postfix({'loss': loss.item()})
 
-        avg_loss = total_loss / len(data_loader)
+        avg_loss = total_loss / len(train_loader) if len(train_loader) > 0 else 0
         print(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.6f}")
 
         # Save a model checkpoint after each epoch
@@ -138,9 +137,9 @@ def train(config: dict):
 if __name__ == '__main__':
     # Set up argument parser to read the config file path from the command line
     # example: python src/train.py --config configs/PG_dataset.yaml
-    
+    DEFAULT_CONFIG_PATH = 'configs/PG_dataset.yaml'
     parser = argparse.ArgumentParser(description="Train a CPT Foundation Model.")
-    parser.add_argument('--config', type=str, required=True,
+    parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_PATH,
                         help="Path to the YAML configuration file.")
     args = parser.parse_args()
 
