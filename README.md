@@ -15,3 +15,10 @@ Oberhollenzer S., Premstaller M., Marte R., Tschuchnigg F., Erharter G.H., March
 # To do
 
 Implement the config files for different datasets.
+
+
+## Notes
+
+Required to ensure conda's version of bundled libraries are used, fixing /lib/x86_64-linux-gnu/libstdc++.so.6: version `CXXABI_1.3.15' not found
+
+    export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
