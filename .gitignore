@@ -1,5 +1,6 @@
 data/raw
 data/processed
+data/splits
 data/scaler.joblib
 *.pyc
 __pycache__/
