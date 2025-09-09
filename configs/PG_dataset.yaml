@@ -13,6 +13,10 @@ feature_mapping:
   #u2: 'u2 (kPa)'
   #soil_class: 'Oberhollenzer_classes'
 
+feature_map:
+  qc: 0
+  fs: 1
+
 # --- Model Hyperparameters ---
 model_params:
   num_features: 2 # 3 numerical + 22 soil classes (for example)
@@ -28,6 +32,6 @@ data_split:
 
 # --- Training Hyperparameters ---
 training_params:
-  batch_size: 2 # was 32, adjusted to use less RAM. 4 is also using too much RAM on the 8gb card
+  batch_size: 2
   learning_rate: 0.0001
-  num_epochs: 50
+  num_epochs: 20
