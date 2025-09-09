@@ -24,6 +24,7 @@ dependencies:
   # Plotting
   - matplotlib
   - seaborn
+  - plotly
 
   # For notebooks and experimentation
   - jupyter
