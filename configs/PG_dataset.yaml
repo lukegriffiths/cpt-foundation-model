@@ -20,8 +20,14 @@ model_params:
   num_heads: 8
   num_layers: 4 # 4-8 is good range
 
+# --- Data Splitting Parameters ---
+data_split:
+  train_ratio: 0.8  # 80% of the data for training
+  val_ratio: 0.1    # 10% for validation. The rest (10%) will be for testing.
+  random_seed: 42   # Seed for reproducible shuffling
+
 # --- Training Hyperparameters ---
 training_params:
-  batch_size: 4 # was 32, adjusted to use less RAM
+  batch_size: 2 # was 32, adjusted to use less RAM. 4 is also using too much RAM on the 8gb card
   learning_rate: 0.0001
   num_epochs: 50
