@@ -19,6 +19,7 @@ dependencies:
   - pandas
   - numpy
   - scikit-learn
+  - libstdcxx-ng
   
   # Plotting
   - matplotlib
