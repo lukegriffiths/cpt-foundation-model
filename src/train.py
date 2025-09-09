@@ -10,6 +10,9 @@ from tqdm import tqdm
 from data_loader import CPTTensorDataset, collate_cpts
 from model import CPTFoundationModel
 
+from torch.cuda.amp import GradScaler, autocast
+
+
 def train(config: dict):
     """
     Main function to run the model training pipeline.
@@ -57,6 +60,7 @@ def train(config: dict):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     loss_fn = nn.MSELoss()
+    scaler = GradScaler()
 
     print("Starting training...")
     # --- 4. Training Loop ---
@@ -81,6 +85,13 @@ def train(config: dict):
             # Determine masking condition: must be a real data point (not padding)
             # and fall under the random probability threshold.
             masking_condition = (prob_mask < mask_ratio) & (attention_mask == 1)
+
+            # Inside your training loop, right after creating masking_condition
+            num_masked = masking_condition.sum().item()
+            print(f"Number of masked tokens in this batch: {num_masked}")
+
+            if num_masked == 0:
+                print("Warning: No tokens were masked!")
             
             # Apply the mask. Here we set masked values to 0.0
             # Another option could be a learned [MASK] embedding.
@@ -88,21 +99,29 @@ def train(config: dict):
 
             # --- Forward Pass ---
             optimizer.zero_grad()
-            predictions = model(corrupted_batch, attention_mask)
-            
-            # --- Loss Calculation ---
-            # IMPORTANT: Calculate loss ONLY on the values that were masked.
-            # This focuses the model on the task of "filling in the blanks".
-            loss = loss_fn(predictions[masking_condition], batch[masking_condition])
+
+            with autocast():
+                predictions = model(corrupted_batch, attention_mask)
+                # IMPORTANT: Calculate loss ONLY on the values that were masked.
+                # This focuses the model on the task of "filling in the blanks".
+                loss = loss_fn(predictions[masking_condition], batch[masking_condition])
             
             # --- Backward Pass ---
-            if torch.isfinite(loss): # Safety check for stable training
-                loss.backward()
-                optimizer.step()
+            # 3. Scale the loss and call backward() on the scaled loss. 
+            # this is to prevent underflow (gradients becoming too small)
+            scaler.scale(loss).backward()
+            
+            # 4. scaler.step() unscales gradients and calls optimizer.step()
+            scaler.step(optimizer)
+            
+            # 5. Update the scale for the next iteration
+            scaler.update()
+            
+            if torch.isfinite(loss):
                 total_loss += loss.item()
             
             pbar.set_postfix({'loss': loss.item()})
-        
+
         avg_loss = total_loss / len(data_loader)
         print(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.6f}")
 

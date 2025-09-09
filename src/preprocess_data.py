@@ -148,5 +148,5 @@ if __name__ == '__main__':
         print(f"Error loading or parsing configuration file: {e}")
         exit()
     
-    # --- Run the main function ---
+
     main(config)

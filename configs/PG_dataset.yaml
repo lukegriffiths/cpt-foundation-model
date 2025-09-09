@@ -1,5 +1,3 @@
-# configs/dataset_A.yaml
-
 # --- Paths ---
 data_paths:
   input_file: 'data/raw/Database_CPT_PremstallerGeotechnik/CPT_PremstallerGeotechnik_revised.csv'
@@ -18,12 +16,12 @@ feature_mapping:
 # --- Model Hyperparameters ---
 model_params:
   num_features: 12 # 3 numerical + 22 soil classes (for example)
-  model_dim: 128
+  model_dim: 64
   num_heads: 8
   num_layers: 4 # 4-8 is good range
 
 # --- Training Hyperparameters ---
 training_params:
-  batch_size: 4 # was 32, adjusted to use less RAM
+  batch_size: 2 # was 32, adjusted to use less RAM
   learning_rate: 0.0001
   num_epochs: 50
