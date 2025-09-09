@@ -1,3 +1,26 @@
+"""
+This script preprocesses Cone Penetration Test (CPT) data from a raw CSV file.
+The preprocessing pipeline consists of the following steps:
+1. Load Data: Reads a CSV file specified in a YAML config and groups the data by CPT 'ID'.
+2. Feature Engineering:
+   - Dynamically processes numerical features (qc, fs, u2) and a categorical feature (soil_class)
+     based on their presence in the config file.
+   - Converts units (e.g., MPa to kPa for 'qc').
+   - Handles missing values by filling with the median.
+   - One-hot encodes the 'soil_class' categorical feature.
+3. Scaling:
+   - Fits a StandardScaler on the combined numerical data from all CPTs to normalize them.
+   - Saves the fitted scaler object for later use during inference.
+4. Tensor Conversion & Saving:
+   - Applies the scaler to the numerical features.
+   - Combines scaled numerical features and one-hot encoded categorical features.
+   - Converts the final processed data for each CPT into a PyTorch tensor.
+   - Saves each tensor as a separate .pt file in a processed data directory.
+
+The script is driven by a YAML configuration file that specifies file paths,
+feature mappings, and other parameters, allowing for flexible data processing.
+"""
+
 import os
 import yaml
 import argparse
@@ -23,76 +46,103 @@ def load_and_group_data(file_path: str) -> tuple[pd.DataFrame | None, dict | Non
     
     print(f"Found {len(cpt_dfs)} unique CPT traces.")
     return df, cpt_dfs
-def preprocess_cpts(cpt_dict: dict, all_soil_classes: list, feature_mapping: dict) -> dict:
-    """Performs unit conversion, one-hot encodes soil classes, and combines features."""
+def preprocess_cpts(cpt_dict: dict, all_soil_classes: list, feature_mapping: dict) -> tuple[dict, list]:
+    """
+    Performs unit conversion, one-hot encodes soil classes, and combines features.
+    Features are processed only if they are defined in the feature_mapping.
+    """
     print("Preprocessing CPTs (unit conversion and one-hot encoding)...")
     processed_cpts = {}
     
-    # Get original column names from the config's feature mapping
-    qc_col = feature_mapping['qc']
-    fs_col = feature_mapping['fs']
-    u2_col = feature_mapping['u2']
-    soil_class_col = feature_mapping['soil_class']
+    # Dynamically get original column names and clean names from the config's feature mapping
+    numerical_cols_original = []
+    clean_numerical_cols = []
     
-    numerical_cols_original = [qc_col, fs_col, u2_col]
-    
+    for clean_name, original_name in feature_mapping.items():
+        if clean_name in ['qc', 'fs', 'u2']:
+            numerical_cols_original.append(original_name)
+            clean_numerical_cols.append(clean_name)
+
+    soil_class_col = feature_mapping.get('soil_class')
+
     for cpt_id, df in tqdm(cpt_dict.items()):
+        combined_features = []
+
         # --- Process Numerical Features ---
-        numerical_df = df[numerical_cols_original].copy()
-        
-        # --- FIX: Force columns to be numeric, coercing errors to NaN ---
-        for col in numerical_cols_original:
-            numerical_df[col] = pd.to_numeric(numerical_df[col], errors='coerce')
-        
-        # --- FIX: Fill any resulting NaN values (e.g., with the median) ---
-        # It's better to fill NaN *before* scaling and unit conversion
-        for col in numerical_cols_original:
-            if numerical_df[col].isnull().any():
-                median_val = numerical_df[col].median()
-                numerical_df[col].fillna(median_val, inplace=True)
-        
-        # --- Continue with existing logic ---
-        numerical_df.rename(columns={qc_col: 'qc', fs_col: 'fs', u2_col: 'u2'}, inplace=True)
-        
-        # Specific transformation: Convert qc from MPa to kPa
-        if '(MPa)' in qc_col:
-            numerical_df['qc'] = numerical_df['qc'] * 1000
-        
+        if numerical_cols_original:
+            numerical_df = df[numerical_cols_original].copy()
+            
+            for col in numerical_cols_original:
+                numerical_df[col] = pd.to_numeric(numerical_df[col], errors='coerce')
+                if numerical_df[col].isnull().any():
+                    median_val = numerical_df[col].median()
+                    numerical_df[col] = numerical_df[col].fillna(median_val)
+
+            rename_dict = {orig: clean for orig, clean in zip(numerical_cols_original, clean_numerical_cols)}
+            numerical_df.rename(columns=rename_dict, inplace=True)
+
+            if 'qc' in clean_numerical_cols and '(MPa)' in feature_mapping.get('qc', ''):
+                numerical_df['qc'] *= 1000
+            
+            combined_features.append(numerical_df.reset_index(drop=True))
+
         # --- Process Categorical Features ---
-        soil_class_series = df[soil_class_col].copy().fillna('Unknown')
-        soil_class_cat = pd.Categorical(soil_class_series, categories=all_soil_classes)
-        one_hot_df = pd.get_dummies(soil_class_cat, prefix='soil')
+        if soil_class_col and soil_class_col in df.columns:
+            soil_class_series = df[soil_class_col].copy().fillna('Unknown')
+            soil_class_cat = pd.Categorical(soil_class_series, categories=all_soil_classes)
+            one_hot_df = pd.get_dummies(soil_class_cat, prefix='soil')
+            combined_features.append(one_hot_df.reset_index(drop=True))
         
-        # --- Combine Features ---
-        # Ensure indices are aligned before concatenating
-        combined_df = pd.concat([numerical_df.reset_index(drop=True), one_hot_df.reset_index(drop=True)], axis=1)
+        # --- Combine All Available Features ---
+        if not combined_features:
+            print(f"Warning: No features were processed for CPT ID {cpt_id}. Skipping.")
+            continue
+        
+        combined_df = pd.concat(combined_features, axis=1)
         processed_cpts[cpt_id] = combined_df
         
-    return processed_cpts
+    return processed_cpts, clean_numerical_cols
 
-def fit_scaler_on_all_data(cpt_dict: dict) -> StandardScaler:
+def fit_scaler_on_all_data(cpt_dict: dict, numerical_cols: list) -> StandardScaler | None:
     """Fits a StandardScaler on the combined NUMERICAL data from all CPTs."""
-    print("Fitting StandardScaler on all numerical data...")
-    clean_numerical_cols = ['qc', 'fs', 'u2']
-    combined_numerical_data = np.vstack([df[clean_numerical_cols].values for df in cpt_dict.values()])
+    if not numerical_cols:
+        print("No numerical columns to scale. Skipping scaler fitting.")
+        return None
+        
+    print(f"Fitting StandardScaler on numerical columns: {numerical_cols}...")
+    combined_numerical_data = np.vstack([df[numerical_cols].values for df in cpt_dict.values()])
     
     scaler = StandardScaler().fit(combined_numerical_data)
     print("Scaler fitted successfully.")
     return scaler
 
-def process_and_save_files(cpt_dict: dict, scaler: StandardScaler, output_dir: str):
+def process_and_save_files(cpt_dict: dict, scaler: StandardScaler | None, numerical_cols: list, output_dir: str):
     """Scales numerical features, combines with one-hot features, and saves tensors."""
     print(f"Processing and saving {len(cpt_dict)} combined tensors to '{output_dir}'...")
     os.makedirs(output_dir, exist_ok=True)
-    clean_numerical_cols = ['qc', 'fs', 'u2']
     
     for cpt_id, df in tqdm(cpt_dict.items()):
         try:
-            numerical_data = df[clean_numerical_cols].values
-            one_hot_data = df.drop(columns=clean_numerical_cols).values
-            
-            scaled_numerical = scaler.transform(numerical_data)
-            final_features = np.hstack([scaled_numerical, one_hot_data])
+            # Separate numerical and one-hot data based on the columns present
+            numerical_data_list = []
+            if numerical_cols:
+                numerical_data = df[numerical_cols].values
+                if scaler:
+                    scaled_numerical = scaler.transform(numerical_data)
+                    numerical_data_list.append(scaled_numerical)
+                else:
+                    numerical_data_list.append(numerical_data)
+
+            one_hot_cols = [col for col in df.columns if col not in numerical_cols]
+            if one_hot_cols:
+                one_hot_data = df[one_hot_cols].values
+                numerical_data_list.append(one_hot_data)
+
+            if not numerical_data_list:
+                print(f"Warning: No data to save for CPT ID {cpt_id}. Skipping.")
+                continue
+
+            final_features = np.hstack(numerical_data_list)
             tensor_data = torch.tensor(final_features, dtype=torch.float32)
             
             output_path = os.path.join(output_dir, f"cpt_{cpt_id}.pt")
@@ -106,19 +156,28 @@ def main(config: dict):
     feature_mapping = config['feature_mapping']
 
     full_df, cpt_data_dict = load_and_group_data(paths['input_file'])
-    if full_df is None:
+    if full_df is None or cpt_data_dict is None:
         return
-        
-    all_soil_classes = full_df[feature_mapping['soil_class']].fillna('Unknown').unique().tolist()
-    print(f"Found {len(all_soil_classes)} unique soil classes: {all_soil_classes}")
     
-    processed_cpts_dict = preprocess_cpts(cpt_data_dict, all_soil_classes, feature_mapping)
+    all_soil_classes = []
+    if 'soil_class' in feature_mapping and feature_mapping['soil_class'] in full_df.columns:
+        all_soil_classes = full_df[feature_mapping['soil_class']].fillna('Unknown').unique().tolist()
+        print(f"Found {len(all_soil_classes)} unique soil classes: {all_soil_classes}")
+    else:
+        print("No 'soil_class' feature defined or found. Skipping soil class processing.")
+
+    processed_cpts_dict, numerical_cols = preprocess_cpts(cpt_data_dict, all_soil_classes, feature_mapping)
     
-    scaler = fit_scaler_on_all_data(processed_cpts_dict)
-    joblib.dump(scaler, paths['scaler_path'])
-    print(f"Scaler saved to '{paths['scaler_path']}'.")
+    if not processed_cpts_dict:
+        print("No CPTs were processed successfully. Exiting.")
+        return
+
+    scaler = fit_scaler_on_all_data(processed_cpts_dict, numerical_cols)
+    if scaler:
+        joblib.dump(scaler, paths['scaler_path'])
+        print(f"Scaler saved to '{paths['scaler_path']}'.")
     
-    process_and_save_files(processed_cpts_dict, scaler, paths['processed_dir'])
+    process_and_save_files(processed_cpts_dict, scaler, numerical_cols, paths['processed_dir'])
     print("\nData processing complete.")
 
 if __name__ == '__main__':
