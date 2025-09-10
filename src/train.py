@@ -5,16 +5,17 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
-# Import the new DataModule
+# Import your modules
 from data_utils import CPTDataModule 
 from model import CPTFoundationModel
+from masking import create_span_mask, create_block_mask, apply_mask_to_input
 
 from torch.cuda.amp import autocast, GradScaler
 
 
 def train(config: dict):
     """
-    Main function to run the model training pipeline.
+    Main function to run the model training pipeline with improved masking.
     
     Args:
         config (dict): A dictionary containing all configuration parameters.
@@ -35,15 +36,28 @@ def train(config: dict):
     # Get Training Parameters
     learning_rate = train_params['learning_rate']
     num_epochs = train_params['num_epochs']
-    mask_ratio = train_params.get('mask_ratio', 0.15)
     
-    print(f"Training parameters:")
+    # Masking parameters
+    mask_ratio = train_params.get('mask_ratio', 0.15)
+    mask_strategy = train_params.get('mask_strategy', 'span')  # 'random', 'span', or 'block'
+    mask_type = train_params.get('mask_type', 'noise')  # 'noise', 'zero', 'mean'
+    mean_span_length = train_params.get('mean_span_length', 5)
+    block_size = train_params.get('block_size', 10)
+    
+    print(f"\nTraining Configuration:")
     print(f"  Learning rate: {learning_rate}")
-    print(f"  Mask ratio: {mask_ratio}")
     print(f"  Batch size: {train_params['batch_size']}")
     print(f"  Model dim: {model_params['model_dim']}")
     print(f"  Num heads: {model_params['num_heads']}")
     print(f"  Num layers: {model_params['num_layers']}")
+    print(f"\nMasking Configuration:")
+    print(f"  Strategy: {mask_strategy}")
+    print(f"  Mask ratio: {mask_ratio}")
+    print(f"  Mask type: {mask_type}")
+    if mask_strategy == 'span':
+        print(f"  Mean span length: {mean_span_length}")
+    elif mask_strategy == 'block':
+        print(f"  Block size: {block_size}")
 
     # --- 2. Data Loading ---
     print("\nSetting up data module...")
@@ -89,35 +103,65 @@ def train(config: dict):
         model.train()
         total_loss = 0
         num_batches = 0
+        total_masked = 0
+        total_tokens = 0
         
         with tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}") as pbar:
             for batch_idx, (batch, attention_mask) in enumerate(pbar):
                 batch = batch.to(device)
                 attention_mask = attention_mask.to(device)
                 
-                # Create masked input
-                corrupted_batch = batch.clone()
+                # --- Create mask based on selected strategy ---
+                if mask_strategy == 'random':
+                    # Original random masking
+                    prob_mask = torch.rand(batch.shape[:2], device=device)
+                    masking_condition = (prob_mask < mask_ratio) & (attention_mask == 1)
                 
-                # Random mask for positions to predict
-                prob_mask = torch.rand(batch.shape[:2], device=device)
-                masking_condition = (prob_mask < mask_ratio) & (attention_mask == 1)
+                elif mask_strategy == 'span':
+                    # Span-based masking (recommended for CPT data)
+                    masking_condition = create_span_mask(
+                        batch.shape[:2], 
+                        attention_mask, 
+                        mask_ratio, 
+                        mean_span_length, 
+                        device
+                    )
                 
+                elif mask_strategy == 'block':
+                    # Fixed block masking
+                    masking_condition = create_block_mask(
+                        batch.shape[:2], 
+                        attention_mask, 
+                        mask_ratio, 
+                        block_size, 
+                        device
+                    )
+                
+                else:
+                    raise ValueError(f"Unknown mask strategy: {mask_strategy}")
+                
+                # Check if any tokens are masked
                 num_masked = masking_condition.sum().item()
                 if num_masked == 0:
                     continue
                 
-                # Use small random noise for masked positions (helps learning)
-                mask_noise = torch.randn_like(batch) * 0.1
-                corrupted_batch = torch.where(
-                    masking_condition.unsqueeze(-1), 
-                    mask_noise, 
-                    corrupted_batch
+                # Track masking statistics
+                num_valid = attention_mask.sum().item()
+                total_masked += num_masked
+                total_tokens += num_valid
+                
+                # --- Apply masking to input ---
+                corrupted_batch = apply_mask_to_input(
+                    batch, 
+                    masking_condition, 
+                    mask_type=mask_type,
+                    mask_value=None  # Not using learnable mask for now
                 )
                 
-                # Forward Pass with mixed precision
+                # --- Forward Pass with mixed precision ---
                 optimizer.zero_grad()
                 
-                with autocast(): # this enables mixed precision
+                with autocast():
                     # Get contextual embeddings from the model
                     contextual_embeddings = model(corrupted_batch, attention_mask)
                     
@@ -134,10 +178,10 @@ def train(config: dict):
                     print(f"\nWarning: Non-finite loss detected at batch {batch_idx}, skipping...")
                     continue
                 
-                # Backward Pass
+                # --- Backward Pass ---
                 scaler.scale(loss).backward()
                 
-                # Gradient clipping, this helps stabilize training
+                # Gradient clipping
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 
@@ -150,39 +194,69 @@ def train(config: dict):
                 num_batches += 1
                 
                 # Update progress bar
+                actual_mask_ratio = total_masked / total_tokens if total_tokens > 0 else 0
                 pbar.set_postfix({
                     'loss': f'{loss.item():.4f}',
-                    'avg_loss': f'{total_loss/num_batches:.4f}' if num_batches > 0 else 'N/A'
+                    'avg_loss': f'{total_loss/num_batches:.4f}' if num_batches > 0 else 'N/A',
+                    'mask_ratio': f'{actual_mask_ratio:.3f}'
                 })
+                
+                # Debug: Print sample predictions every 100 batches
+                if batch_idx % 100 == 0 and batch_idx > 0 and epoch == 0:
+                    with torch.no_grad():
+                        sample_pred = predictions[:3].cpu()
+                        sample_target = target_values[:3].cpu()
+                        print(f"\n  Sample prediction: {sample_pred[0].numpy()}")
+                        print(f"  Sample target:     {sample_target[0].numpy()}")
         
         # Calculate epoch metrics
         avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
-        print(f"\nEpoch {epoch+1}/{num_epochs} - Training Loss: {avg_loss:.6f}")
+        actual_mask_ratio = total_masked / total_tokens if total_tokens > 0 else 0
         
-        # Validation every 5 epochs
+        print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
+        print(f"  Training Loss: {avg_loss:.6f}")
+        print(f"  Actual mask ratio: {actual_mask_ratio:.3f}")
+        
+        # --- Validation every 5 epochs ---
         if (epoch + 1) % 5 == 0:
             model.eval()
             val_loss = 0
             val_batches = 0
+            val_masked = 0
+            val_tokens = 0
             
             with torch.no_grad():
                 for batch, attention_mask in tqdm(val_loader, desc="Validation", leave=False):
                     batch = batch.to(device)
                     attention_mask = attention_mask.to(device)
                     
-                    # Same masking process as training
-                    corrupted_batch = batch.clone()
-                    prob_mask = torch.rand(batch.shape[:2], device=device)
-                    masking_condition = (prob_mask < 0.15) & (attention_mask == 1)
+                    # Use same masking strategy as training
+                    if mask_strategy == 'random':
+                        prob_mask = torch.rand(batch.shape[:2], device=device)
+                        masking_condition = (prob_mask < mask_ratio) & (attention_mask == 1)
+                    elif mask_strategy == 'span':
+                        masking_condition = create_span_mask(
+                            batch.shape[:2], attention_mask, 
+                            mask_ratio, mean_span_length, device
+                        )
+                    elif mask_strategy == 'block':
+                        masking_condition = create_block_mask(
+                            batch.shape[:2], attention_mask,
+                            mask_ratio, block_size, device
+                        )
                     
                     if masking_condition.sum() == 0:
                         continue
                     
-                    mask_noise = torch.randn_like(batch) * 0.1
-                    corrupted_batch = torch.where(
-                        masking_condition.unsqueeze(-1), 
-                        mask_noise, 
-                        corrupted_batch
+                    val_masked += masking_condition.sum().item()
+                    val_tokens += attention_mask.sum().item()
+                    
+                    # Apply same masking type
+                    corrupted_batch = apply_mask_to_input(
+                        batch, 
+                        masking_condition, 
+                        mask_type=mask_type,
+                        attention_mask=attention_mask
                     )
                     
                     # Forward pass
@@ -197,7 +271,10 @@ def train(config: dict):
                         val_batches += 1
             
             avg_val_loss = val_loss / val_batches if val_batches > 0 else float('inf')
-            print(f"Validation Loss: {avg_val_loss:.6f}")
+            val_mask_ratio = val_masked / val_tokens if val_tokens > 0 else 0
+            
+            print(f"  Validation Loss: {avg_val_loss:.6f}")
+            print(f"  Validation mask ratio: {val_mask_ratio:.3f}")
             
             # Update learning rate based on validation loss
             scheduler.step(avg_val_loss)
@@ -212,9 +289,9 @@ def train(config: dict):
                     'loss': avg_val_loss,
                     'config': config
                 }, model_save_path.replace('.pth', '_best.pth'))
-                print(f"Saved best model with validation loss: {best_loss:.6f}")
+                print(f"  ✓ Saved best model with validation loss: {best_loss:.6f}")
         
-        # Regular checkpoint save
+        # Regular checkpoint save every 10 epochs
         if (epoch + 1) % 10 == 0:
             torch.save({
                 'epoch': epoch,
@@ -223,13 +300,18 @@ def train(config: dict):
                 'loss': avg_loss,
                 'config': config
             }, model_save_path)
+            print(f"  ✓ Saved checkpoint at epoch {epoch+1}")
 
-    print(f"\nTraining complete. Models saved to '{model_save_path}'")
+    print(f"\n{'='*50}")
+    print(f"Training complete!")
+    print(f"Best validation loss: {best_loss:.6f}")
+    print(f"Models saved to: {os.path.dirname(model_save_path)}")
+    print(f"{'='*50}")
 
 
 if __name__ == '__main__':
     DEFAULT_CONFIG_PATH = 'configs/PG_dataset.yaml'
-    parser = argparse.ArgumentParser(description="Train a CPT Foundation Model.")
+    parser = argparse.ArgumentParser(description="Train a CPT Foundation Model with advanced masking.")
     parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_PATH,
                         help="Path to the YAML configuration file.")
     args = parser.parse_args()
@@ -237,12 +319,12 @@ if __name__ == '__main__':
     try:
         with open(args.config, 'r') as f:
             config = yaml.safe_load(f)
-        print("Configuration loaded successfully.")
+        print(f"Configuration loaded from: {args.config}")
     except FileNotFoundError:
         print(f"Error: Configuration file not found at '{args.config}'")
-        exit()
+        exit(1)
     except Exception as e:
         print(f"Error loading configuration file: {e}")
-        exit()
+        exit(1)
     
     train(config)

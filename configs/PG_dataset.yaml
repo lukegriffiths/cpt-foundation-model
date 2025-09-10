@@ -41,3 +41,8 @@ training_params:
   num_epochs: 200
   max_len: 1028
   overlap: 256
+  mask_ratio: 0.15  # Overall proportion of tokens to mask
+  mask_strategy: 'span'  # 'random', 'span', or 'block'
+  mean_span_length: 5  # Average length of masked spans (geometric distribution)
+  block_size: 10  # Fixed size of masked blocks
+  mask_type: 'noise' # 'noise', 'zero', 'mean', or 'learnable'
