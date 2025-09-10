@@ -15,6 +15,7 @@ Oberhollenzer S., Premstaller M., Marte R., Tschuchnigg F., Erharter G.H., March
 # To do
 
 Implement the config files for different datasets.
+Remove auto loading and chunking of data from datamodule.
 
 
 ## Notes
