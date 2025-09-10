@@ -16,33 +16,25 @@ feature_mapping:
 # --- Model Hyperparameters ---
 model_params:
   num_features: 2 # 3 numerical + 22 soil classes (for example)
-  model_dim: 64
+  model_dim: 256
   num_heads: 8
   num_layers: 4 # 4-8 is good range  // ...existing code...
-  # --- Training Hyperparameters ---
-  training_params:
-    batch_size: 8
-    learning_rate: 0.0001
-    num_epochs: 50
-    max_len: 1028
-    overlap: 256
-    mask_ratio: 0.15 # The proportion of tokens to mask for the pre-training task
+
+# --- Training Hyperparameters ---
+training_params:
+  batch_size: 16
+  learning_rate: 0.0001
+  num_epochs: 50
+  max_len: 512
+  overlap: 128
+  mask_ratio: 0.2  # Overall proportion of tokens to mask
+  mask_strategy: 'span'  # 'random', 'span', or 'block'
+  mean_span_length: 20  # Average length of masked spans (geometric distribution)
+  block_size: 10  # Fixed size of masked blocks
+  mask_type: 'noise' # 'noise', 'zero', 'mean', or 'learnable
 
 # --- Data Splitting Parameters ---
 data_split:
   train_ratio: 0.8  # 80% of the data for training
   val_ratio: 0.1    # 10% for validation. The rest (10%) will be for testing.
   random_seed: 42   # Seed for reproducible shuffling
-
-# --- Training Hyperparameters ---
-training_params:
-  batch_size: 8
-  learning_rate: 0.0001
-  num_epochs: 200
-  max_len: 1028
-  overlap: 256
-  mask_ratio: 0.15  # Overall proportion of tokens to mask
-  mask_strategy: 'span'  # 'random', 'span', or 'block'
-  mean_span_length: 5  # Average length of masked spans (geometric distribution)
-  block_size: 10  # Fixed size of masked blocks
-  mask_type: 'noise' # 'noise', 'zero', 'mean', or 'learnable'

@@ -1,0 +1,24 @@
+# --- Paths ---
+data_paths:
+  # Path to the raw data, needed to create the labels
+  input_file: 'data/raw/Database_CPT_PremstallerGeotechnik/CPT_PremstallerGeotechnik_revised.csv'
+  # Path to the pre-trained foundation model
+  foundation_model_path: 'models/foundation_model_PG.pth' 
+  # Path to the directory with preprocessed tensors (from the first step)
+  processed_dir: 'data/processed/PG'
+  # Path to the file containing the labels you just created
+  labels_file: 'data/labels/ic_labels.csv' 
+  # Where to save the new, fine-tuned model
+  finetuned_model_save_path: 'models/finetuned_ic_predictor.pth'
+
+# --- Model Parameters ---
+# We need to know the num_features of the original foundation model
+foundation_model_params:
+  num_features: 2 # Or whatever was used to train the foundation model
+
+# --- Fine-Tuning Hyperparameters ---
+finetuning_params:
+  batch_size: 16
+  # Use a smaller learning rate for fine-tuning
+  learning_rate: 1e-5 
+  num_epochs: 30
