@@ -105,3 +105,111 @@ class IcPredictionModel(nn.Module):
         
         # 3. Remove the last dimension (from 1 to nothing) to match target shape for loss calculation.
         return ic_predictions.squeeze(-1)
+    
+
+
+class IcPredictionModel_updated(nn.Module):
+    """
+    A fine-tuning model that uses the foundation model as a feature extractor
+    to predict a single continuous value (like Ic) for each token.
+    """
+    def __init__(self, foundation_model: CPTFoundationModel, model_dim: int, 
+                 freeze_foundation: bool = True, dropout_rate: float = 0.1,
+                 hidden_dim: int = None):
+        super().__init__()
+        self.foundation_model = foundation_model
+        
+        # Option to freeze or unfreeze foundation model
+        for param in self.foundation_model.parameters():
+            param.requires_grad = not freeze_foundation
+        
+        # Allow customizable hidden dimension
+        if hidden_dim is None:
+            hidden_dim = model_dim // 2
+        
+        # Improved regression head with:
+        # 1. Layer normalization for stability
+        # 2. More gradual dimension reduction
+        # 3. Skip connection option
+        # 4. Better activation function for regression
+        self.use_skip = True  # Enable skip connections
+        
+        self.regression_head = nn.Sequential(
+            nn.LayerNorm(model_dim),  # Normalize inputs for stability
+            nn.Linear(model_dim, hidden_dim),
+            nn.GELU(),  # GELU often works better than ReLU for transformers
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.GELU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim // 2, 1)
+        )
+        
+        # Optional: Direct projection for skip connection
+        if self.use_skip:
+            self.skip_projection = nn.Linear(model_dim, 1)
+        
+        # Initialize weights properly for regression
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights for better convergence."""
+        for module in self.regression_head.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier initialization for regression tasks
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+        
+        if self.use_skip:
+            nn.init.xavier_uniform_(self.skip_projection.weight)
+            nn.init.constant_(self.skip_projection.bias, 0)
+    
+    def forward(self, src: torch.Tensor, src_key_padding_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            src: The input sequence tensor, shape [batch_size, seq_len, num_features].
+            src_key_padding_mask: The attention mask, shape [batch_size, seq_len].
+        
+        Returns:
+            A tensor of predictions, shape [batch_size, seq_len].
+        """
+        # Get contextual embeddings from foundation model
+        contextual_embeddings = self.foundation_model(src, src_key_padding_mask)
+        
+        # Pass through regression head
+        ic_predictions = self.regression_head(contextual_embeddings)
+        
+        # Add skip connection if enabled
+        if self.use_skip:
+            skip_pred = self.skip_projection(contextual_embeddings)
+            ic_predictions = ic_predictions + 0.1 * skip_pred  # Small weight for skip
+        
+        # Remove last dimension to match target shape
+        return ic_predictions.squeeze(-1)
+    
+    def unfreeze_foundation(self, unfreeze_layers: int = None):
+        """
+        Gradually unfreeze foundation model layers for fine-tuning.
+        
+        Args:
+            unfreeze_layers: Number of top layers to unfreeze. 
+                           None means unfreeze all.
+        """
+        if unfreeze_layers is None:
+            # Unfreeze entire foundation model
+            for param in self.foundation_model.parameters():
+                param.requires_grad = True
+        else:
+            # Unfreeze only the top N transformer layers
+            params = list(self.foundation_model.transformer_encoder.parameters())
+            # Each transformer layer has multiple parameters
+            params_per_layer = len(params) // self.foundation_model.transformer_encoder.num_layers
+            
+            # Unfreeze the last N layers
+            for param in params[-unfreeze_layers * params_per_layer:]:
+                param.requires_grad = True
+    
+    def get_num_trainable_params(self):
+        """Return the number of trainable parameters."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
