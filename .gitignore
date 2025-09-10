@@ -2,6 +2,7 @@ data/raw
 data/processed
 data/splits
 data/scaler.joblib
+data/labels
 *.pyc
 __pycache__/
 models
