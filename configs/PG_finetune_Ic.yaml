@@ -20,5 +20,5 @@ foundation_model_params:
 finetuning_params:
   batch_size: 16
   # Use a smaller learning rate for fine-tuning
-  learning_rate: 1e-5 
+  learning_rate: 0.00001
   num_epochs: 30
