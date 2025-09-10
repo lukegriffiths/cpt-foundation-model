@@ -100,15 +100,23 @@ def train(config: dict):
             optimizer.zero_grad()
 
             with autocast():
-                predictions = model(corrupted_batch, attention_mask)
-                # IMPORTANT: Calculate loss ONLY on the values that were masked.
-                # This focuses the model on the task of "filling in the blanks".
-                loss = loss_fn(predictions[masking_condition], batch[masking_condition])
+                # Get the contextual embeddings from the model
+                contextual_embeddings = model(corrupted_batch, attention_mask)
+                
+                # Apply the final projection ONLY to the masked tokens
+                masked_embeddings = contextual_embeddings[masking_condition]
+                predictions = model.output_projection(masked_embeddings)
+
+                # Calculate loss ONLY on the values that were masked.
+                loss = loss_fn(predictions, batch[masking_condition])
             
             # --- Backward Pass ---
             # 3. Scale the loss and call backward() on the scaled loss. 
             # this is to prevent underflow (gradients becoming too small)
             scaler.scale(loss).backward()
+            
+            # Clip gradients to prevent them from exploding
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             # 4. scaler.step() unscales gradients and calls optimizer.step()
             scaler.step(optimizer)

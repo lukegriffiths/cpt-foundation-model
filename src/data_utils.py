@@ -23,31 +23,56 @@ import joblib
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
-# +-------------------------------------------------+
-# |  Component 1: The PyTorch Dataset Class         |
-# +-------------------------------------------------+
+
 class CPTTensorDataset(Dataset):
-    """Loads a specific subset of pre-processed CPT tensor files."""
-    def __init__(self, processed_dir: str, cpt_ids: list):
-        # Build file paths ONLY for the IDs in the provided list
-        self.file_paths = [
+    """
+    Loads pre-processed CPT tensor files, chunks long sequences, 
+    and applies to a specific subset of CPT IDs.
+    """
+    def __init__(self, processed_dir: str, cpt_ids: list, max_len: int, overlap: int):
+        self.chunks = []
+        
+        # Get all file paths for the given CPT IDs
+        file_paths = [
             os.path.join(processed_dir, f"cpt_{cpt_id}.pt") 
             for cpt_id in cpt_ids
         ]
-        # Filter out paths that might not exist for some reason
-        self.file_paths = [p for p in self.file_paths if os.path.exists(p)]
+        # Filter out paths that might not exist
+        file_paths = [p for p in file_paths if os.path.exists(p)]
+
+        print(f"Processing {len(file_paths)} files with max_len={max_len} and overlap={overlap}...")
+        for path in tqdm(file_paths, desc="Loading and Chunking Data"):
+            tensor = torch.load(path)
+            
+            # If the tensor is shorter than or equal to max_len, just add it
+            if tensor.shape[0] <= max_len:
+                self.chunks.append(tensor)
+            # Otherwise, create overlapping chunks
+            else:
+                start = 0
+                while start < tensor.shape[0]:
+                    end = start + max_len
+                    chunk = tensor[start:end]
+                    
+                    # If the last chunk is too small, it might be better to ignore it
+                    # or handle it differently, but for now, we include it.
+                    self.chunks.append(chunk)
+                    
+                    # Move the window for the next chunk
+                    if end >= tensor.shape[0]:
+                        break
+                    start += max_len - overlap
 
     def __len__(self) -> int:
-        return len(self.file_paths)
+        return len(self.chunks)
 
     def __getitem__(self, idx: int) -> torch.Tensor:
-        return torch.load(self.file_paths[idx])
+        return self.chunks[idx]
 
-# +-------------------------------------------------+
-# |  Component 2: The Custom Collate Function       |
-# +-------------------------------------------------+
+
 def collate_cpts(batch: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pads sequences in a batch and creates an attention mask."""
+    """ Custom collate function
+    Pads sequences in a batch and creates an attention mask."""
     padding_value = -9999.0
     padded_batch = pad_sequence(batch, batch_first=True, padding_value=padding_value)
     lengths = [len(seq) for seq in batch]
@@ -56,11 +81,10 @@ def collate_cpts(batch: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]
         attention_mask[i, :length] = 1.0
     return padded_batch, attention_mask
 
-# +-------------------------------------------------+
-# |  Component 3: The Main DataModule Class         |
-# +-------------------------------------------------+
+
 class CPTDataModule:
-    """A class to handle the entire data pipeline from raw CSV to DataLoader."""
+    """Main datamodule class.
+    A class to handle the entire data pipeline from raw CSV to DataLoader."""
     def __init__(self, config: dict):
         self.config = config
         self.paths = config['data_paths']
@@ -89,9 +113,12 @@ class CPTDataModule:
         test_ids = np.loadtxt(os.path.join(splits_dir, 'test_ids.txt'), dtype=int).tolist()
 
         # Create datasets for each split
-        self.train_dataset = CPTTensorDataset(self.paths['processed_dir'], train_ids)
-        self.val_dataset = CPTTensorDataset(self.paths['processed_dir'], val_ids)
-        self.test_dataset = CPTTensorDataset(self.paths['processed_dir'], test_ids)
+        max_len = self.config['training_params'].get('max_len', 2048)
+        overlap = self.config['training_params'].get('overlap', 256)
+        
+        self.train_dataset = CPTTensorDataset(self.paths['processed_dir'], train_ids, max_len, overlap)
+        self.val_dataset = CPTTensorDataset(self.paths['processed_dir'], val_ids, max_len, overlap)
+        self.test_dataset = CPTTensorDataset(self.paths['processed_dir'], test_ids, max_len, overlap)
         
         print(f"Train dataset size: {len(self.train_dataset)}")
         print(f"Validation dataset size: {len(self.val_dataset)}")
@@ -112,7 +139,7 @@ class CPTDataModule:
              raise RuntimeError("Dataset not set up. Please run data_module.setup() first.")
 
         batch_size = self.config['training_params']['batch_size']
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_cpts)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_cpts, num_workers=4, pin_memory=True)
 
     def _preprocess(self):
         """The main preprocessing pipeline, encapsulated as a private method."""
@@ -204,9 +231,7 @@ class CPTDataModule:
             tensor_data = torch.tensor(final_features, dtype=torch.float32)
             torch.save(tensor_data, os.path.join(output_dir, f"cpt_{cpt_id}.pt"))
 
-# +-------------------------------------------------+
-# |  Component 4: Main Execution Block (for direct calls) |
-# +-------------------------------------------------+
+
 if __name__ == '__main__':
     """This block allows you to run preprocessing directly from the command line."""
     DEFAULT_CONFIG_PATH = 'configs/PG_dataset.yaml'
