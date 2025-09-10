@@ -73,7 +73,7 @@ class CPTTensorDataset(Dataset):
 def collate_cpts(batch: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
     """ Custom collate function
     Pads sequences in a batch and creates an attention mask."""
-    padding_value = -9999.0
+    padding_value = 0
     padded_batch = pad_sequence(batch, batch_first=True, padding_value=padding_value)
     lengths = [len(seq) for seq in batch]
     attention_mask = torch.zeros(padded_batch.shape[:2], dtype=torch.float32)
