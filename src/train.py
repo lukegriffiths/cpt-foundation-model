@@ -33,9 +33,11 @@ def train(config: dict):
     train_params = config['training_params']
     model_params = config['model_params']
     
-    learning_rate = train_params['learning_rate']
-    num_epochs = train_params['num_epochs']
-    mask_ratio = train_params.get('mask_ratio', 0.15) # Default to 0.15 if not specified
+    # --- Get Training Parameters ---
+    training_params = config['training_params']
+    learning_rate = training_params['learning_rate']
+    num_epochs = training_params['num_epochs']
+    mask_ratio = training_params.get('mask_ratio', 0.15) # Get mask_ratio from config
 
     # --- 2. Data Loading (now much cleaner) ---
     print("Setting up data module...")
@@ -56,7 +58,8 @@ def train(config: dict):
         num_layers=model_params['num_layers']
     ).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    # --- Setup Optimizer ---
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     loss_fn = nn.MSELoss()
     scaler = GradScaler()
 
@@ -67,67 +70,56 @@ def train(config: dict):
         total_loss = 0
         
         # Use tqdm for a progress bar
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
-        
-        for batch, attention_mask in pbar:
-            batch = batch.to(device)
-            attention_mask = attention_mask.to(device)
-            
-            # --- Masked Modeling Task ---
-            # Create a corrupted version of the input batch
-            corrupted_batch = batch.clone()
-            
-            # Create a probability tensor to decide which tokens to mask
-            prob_mask = torch.rand(batch.shape[:2], device=device)
-            
-            # Determine masking condition: must be a real data point (not padding)
-            # and fall under the random probability threshold.
-            masking_condition = (prob_mask < mask_ratio) & (attention_mask == 1)
-
-            # Inside your training loop, right after creating masking_condition
-            num_masked = masking_condition.sum().item()
-            # print(f"Number of masked tokens in this batch: {num_masked}")
-
-            if num_masked == 0:
-                # print("Warning: No tokens were masked!")
-                continue
-            
-            # Apply the mask. Here we set masked values to 0.0
-            # Another option could be a learned [MASK] embedding.
-            corrupted_batch[masking_condition] = 0.0
-
-            # --- Forward Pass ---
-            optimizer.zero_grad()
-
-            with autocast():
-                # Get the contextual embeddings from the model
-                contextual_embeddings = model(corrupted_batch, attention_mask)
+        with tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}") as pbar:
+            for batch, attention_mask in pbar:
+                batch = batch.to(device)
+                attention_mask = attention_mask.to(device)
                 
-                # Apply the final projection ONLY to the masked tokens
-                masked_embeddings = contextual_embeddings[masking_condition]
-                predictions = model.output_projection(masked_embeddings)
+                # --- Create a corrupted version of the input batch ---
+                corrupted_batch = batch.clone()
+                prob_mask = torch.rand(batch.shape[:2], device=device)
+                masking_condition = (prob_mask < mask_ratio) & (attention_mask == 1)
+                
+                num_masked = masking_condition.sum().item()
+                if num_masked == 0:
+                    continue # Skip this batch if no tokens are masked
+                
+                # Apply the mask. Here we set masked values to 0.0
+                # Another option could be a learned [MASK] embedding.
+                corrupted_batch[masking_condition] = 0.0
 
-                # Calculate loss ONLY on the values that were masked.
-                loss = loss_fn(predictions, batch[masking_condition])
-            
-            # --- Backward Pass ---
-            # 3. Scale the loss and call backward() on the scaled loss. 
-            # this is to prevent underflow (gradients becoming too small)
-            scaler.scale(loss).backward()
-            
-            # Clip gradients to prevent them from exploding
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
-            # 4. scaler.step() unscales gradients and calls optimizer.step()
-            scaler.step(optimizer)
-            
-            # 5. Update the scale for the next iteration
-            scaler.update()
-            
-            if torch.isfinite(loss):
-                total_loss += loss.item()
-            
-            pbar.set_postfix({'loss': loss.item()})
+                # --- Forward Pass ---
+                optimizer.zero_grad()
+
+                with autocast():
+                    # Get the contextual embeddings from the model
+                    contextual_embeddings = model(corrupted_batch, attention_mask)
+                    
+                    # Apply the final projection ONLY to the masked tokens
+                    masked_embeddings = contextual_embeddings[masking_condition]
+                    predictions = model.output_projection(masked_embeddings)
+
+                    # Calculate loss ONLY on the values that were masked.
+                    loss = loss_fn(predictions, batch[masking_condition])
+                
+                # --- Backward Pass ---
+                # 3. Scale the loss and call backward() on the scaled loss. 
+                # this is to prevent underflow (gradients becoming too small)
+                scaler.scale(loss).backward()
+                
+                # Clip gradients to prevent them from exploding
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
+                # 4. scaler.step() unscales gradients and calls optimizer.step()
+                scaler.step(optimizer)
+                
+                # 5. Update the scale for the next iteration
+                scaler.update()
+                
+                if torch.isfinite(loss):
+                    total_loss += loss.item()
+                
+                pbar.set_postfix({'loss': loss.item()})
 
         avg_loss = total_loss / len(train_loader) if len(train_loader) > 0 else 0
         print(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.6f}")
