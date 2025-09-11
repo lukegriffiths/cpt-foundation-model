@@ -6,3 +6,4 @@ data/labels
 *.pyc
 __pycache__/
 models
+results
