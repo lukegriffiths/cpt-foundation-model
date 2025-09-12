@@ -21,4 +21,4 @@ finetuning_params:
   batch_size: 16
   # Use a smaller learning rate for fine-tuning
   learning_rate: 0.00001
-  num_epochs: 30
+  num_epochs: 200
