@@ -66,7 +66,7 @@ class CPTFoundationModel(nn.Module):
         return contextual_embeddings
 
 
-class IcPredictionModel(nn.Module):
+class IcPredictionModel_old(nn.Module):
     """
     A fine-tuning model that uses the foundation model as a feature extractor
     to predict a single continuous value (like Ic) for each token.
@@ -108,7 +108,7 @@ class IcPredictionModel(nn.Module):
     
 
 
-class IcPredictionModel_updated(nn.Module):
+class IcPredictionModel(nn.Module):
     """
     A fine-tuning model that uses the foundation model as a feature extractor
     to predict a single continuous value (like Ic) for each token.
