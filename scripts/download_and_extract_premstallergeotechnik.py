@@ -9,7 +9,7 @@ from io import BytesIO
 
 def main():
     url = "https://www.tugraz.at/fileadmin/user_upload/Institute/IBG/Datenbank/Database_CPT_PremstallerGeotechnik.zip"
-    extract_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "raw")
+    extract_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "raw", "Database_CPT_PremstallerGeotechnik")
     os.makedirs(extract_dir, exist_ok=True)
     print(f"Downloading {url} ...")
     response = requests.get(url)
