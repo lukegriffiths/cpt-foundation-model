@@ -7,3 +7,4 @@ data/labels
 __pycache__/
 models
 results
+.vscode/settings.json
