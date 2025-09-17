@@ -1,26 +1,25 @@
 # Conda environment configuration for the CPT Foundation Model project
 # used with `conda env create -f environment.yml`
+# delete existing environment with `conda env remove -n cpt-fm`
+# Conda environment configuration for the CPT Foundation Model project
+# used with `conda env create -f environment.yml`
 name: cpt-fm
 
 channels:
   - pytorch
+  - nvidia
   - conda-forge
   - defaults
 
 dependencies:
-  # Core dependencies
+  # Core Conda dependencies (NOTE: PyTorch is now handled by Pip)
   - python=3.10
-  - pytorch
-  - torchvision
-  - torchaudio
-  - cudatoolkit=11.8 # Or the version compatible with your NVIDIA driver
-
-  # Data handling and processing
   - pandas
   - numpy
   - scikit-learn
   - libstdcxx-ng
-  
+  - pip # Ensure pip is installed by conda
+
   # Plotting
   - matplotlib
   - seaborn
@@ -32,3 +31,13 @@ dependencies:
 
   # Optional but recommended for Transformer models
   - transformers
+
+  # Pip dependencies for installing PyTorch for CUDA 12.8
+  - pip:
+    # First, specify the repository URL
+    - --index-url https://download.pytorch.org/whl/cu128
+
+    # Second, list the packages to install from that repository
+    - torch
+    - torchvision
+    - torchaudio
