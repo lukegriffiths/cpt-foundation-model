@@ -92,7 +92,7 @@ def train(config: dict):
     
     # Learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5, verbose=True, min_lr=1e-6
+        optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6
     )
 
     print("\nStarting training...")
