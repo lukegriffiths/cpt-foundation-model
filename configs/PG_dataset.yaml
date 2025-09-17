@@ -15,23 +15,24 @@ feature_mapping:
 
 # --- Model Hyperparameters ---
 model_params:
-  num_features: 2 # 3 numerical + 22 soil classes (for example)
-  model_dim: 256
-  num_heads: 8
-  num_layers: 4 # 4-8 is good range  // ...existing code...
+  num_features: 2 # qc and fs for CPT data
+  model_dim: 128  # Reduced from 256 - sufficient for 2 features, faster training
+  num_heads: 4    # Reduced from 8 - better for smaller model_dim (128/4=32 head_dim)
+  num_layers: 6   # Increased from 4 - CPT sequences need depth for geological patterns
+  dropout: 0.15   # Added explicit dropout for regularization
 
 # --- Training Hyperparameters ---
 training_params:
-  batch_size: 16
-  learning_rate: 0.0001
-  num_epochs: 300
-  max_len: 512
-  overlap: 128
-  mask_ratio: 0.2  # Overall proportion of tokens to mask
-  mask_strategy: 'span'  # 'random', 'span', or 'block'
-  mean_span_length: 20  # Average length of masked spans (geometric distribution)
-  block_size: 10  # Fixed size of masked blocks
-  mask_type: 'noise' # 'noise', 'zero', 'mean', or 'learnable
+  batch_size: 32         # Increased from 16 - leverage GPU memory for faster training
+  learning_rate: 0.0002  # Increased from 0.0001 - higher LR with larger batches
+  num_epochs: 200        # Reduced from 300 - larger batches train faster
+  max_len: 1024          # Increased from 512 - GPU can handle longer sequences
+  overlap: 256           # Increased from 128 - better context with longer sequences
+  mask_ratio: 0.15       # Reduced from 0.2 - more conservative for better learning
+  mask_strategy: 'span'  # Keep span masking - good for sequential data
+  mean_span_length: 15   # Reduced from 20 - shorter spans for better reconstruction
+  block_size: 8          # Reduced from 10 - smaller blocks for finer granularity
+  mask_type: 'noise'     # Keep noise masking - robust for CPT data
 
 # --- Data Splitting Parameters ---
 data_split:

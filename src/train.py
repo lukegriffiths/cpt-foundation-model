@@ -4,13 +4,15 @@ import argparse
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+import time
 
 # Import your modules
 from data_utils import CPTDataModule 
 from model import CPTFoundationModel
 from masking import create_span_mask, create_block_mask, apply_mask_to_input
+from metrics_tracker import CPTMetricsTracker, get_gpu_memory_usage
 
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
 
 def train(config: dict):
@@ -43,6 +45,22 @@ def train(config: dict):
     mask_type = train_params.get('mask_type', 'noise')  # 'noise', 'zero', 'mean'
     mean_span_length = train_params.get('mean_span_length', 5)
     block_size = train_params.get('block_size', 10)
+    
+    # --- MLflow Metrics Tracking Setup ---
+    experiment_name = "cpt-foundation-training"
+    run_name = f"run_{time.strftime('%Y%m%d_%H%M%S')}"
+    
+    tracker = CPTMetricsTracker(
+        experiment_name=experiment_name,
+        run_name=run_name
+    )
+    
+    # Start MLflow run and log configuration
+    tracker.start_run(config)
+    
+    print(f"\nMLflow tracking initialized:")
+    print(f"  Experiment: {experiment_name}")
+    print(f"  Run: {run_name}")
     
     print(f"\nTraining Configuration:")
     print(f"  Learning rate: {learning_rate}")
@@ -161,7 +179,7 @@ def train(config: dict):
                 # --- Forward Pass with mixed precision ---
                 optimizer.zero_grad()
                 
-                with autocast():
+                with autocast('cuda'):
                     # Get contextual embeddings from the model
                     contextual_embeddings = model(corrupted_batch, attention_mask)
                     
@@ -212,10 +230,23 @@ def train(config: dict):
         # Calculate epoch metrics
         avg_loss = total_loss / num_batches if num_batches > 0 else float('inf')
         actual_mask_ratio = total_masked / total_tokens if total_tokens > 0 else 0
+        current_lr = optimizer.param_groups[0]['lr']
+        gpu_memory = get_gpu_memory_usage()
+        
+        # Log metrics to MLflow
+        tracker.log_epoch_metrics(
+            epoch=epoch,
+            train_loss=avg_loss,
+            learning_rate=current_lr,
+            mask_ratio=actual_mask_ratio,
+            gpu_memory_mb=gpu_memory
+        )
         
         print(f"\nEpoch {epoch+1}/{num_epochs} Summary:")
         print(f"  Training Loss: {avg_loss:.6f}")
+        print(f"  Learning Rate: {current_lr:.2e}")
         print(f"  Actual mask ratio: {actual_mask_ratio:.3f}")
+        print(f"  GPU Memory: {gpu_memory:.1f} MB")
         
         # --- Validation every 5 epochs ---
         if (epoch + 1) % 5 == 0:
@@ -273,6 +304,16 @@ def train(config: dict):
             avg_val_loss = val_loss / val_batches if val_batches > 0 else float('inf')
             val_mask_ratio = val_masked / val_tokens if val_tokens > 0 else 0
             
+            # Update MLflow with validation metrics
+            tracker.log_epoch_metrics(
+                epoch=epoch,
+                train_loss=avg_loss,
+                learning_rate=current_lr,
+                mask_ratio=actual_mask_ratio,
+                val_loss=avg_val_loss,
+                gpu_memory_mb=gpu_memory
+            )
+            
             print(f"  Validation Loss: {avg_val_loss:.6f}")
             print(f"  Validation mask ratio: {val_mask_ratio:.3f}")
             
@@ -282,31 +323,50 @@ def train(config: dict):
             # Save best model
             if avg_val_loss < best_loss:
                 best_loss = avg_val_loss
+                best_model_path = model_save_path.replace('.pth', '_best.pth')
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': avg_val_loss,
                     'config': config
-                }, model_save_path.replace('.pth', '_best.pth'))
+                }, best_model_path)
+                
+                # Log best model to MLflow
+                tracker.log_model_checkpoint(model, best_model_path, is_best=True)
+                
                 print(f"  ✓ Saved best model with validation loss: {best_loss:.6f}")
         
         # Regular checkpoint save every 10 epochs
         if (epoch + 1) % 10 == 0:
+            checkpoint_path = model_save_path.replace('.pth', f'_epoch_{epoch+1}.pth')
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': avg_loss,
                 'config': config
-            }, model_save_path)
+            }, checkpoint_path)
+            
+            # Log checkpoint to MLflow
+            tracker.log_model_checkpoint(model, checkpoint_path, is_best=False)
+            
             print(f"  ✓ Saved checkpoint at epoch {epoch+1}")
 
+    # Training complete - final logging and cleanup
+    tracker.log_final_summary(best_loss, num_epochs)
+    tracker.create_training_plots("plots")
+    tracker.export_metrics_csv("training_metrics.csv")
+    
     print(f"\n{'='*50}")
     print(f"Training complete!")
     print(f"Best validation loss: {best_loss:.6f}")
     print(f"Models saved to: {os.path.dirname(model_save_path)}")
+    print(f"MLflow UI: {tracker.get_run_url()}")
     print(f"{'='*50}")
+    
+    # End MLflow run
+    tracker.end_run()
 
 
 if __name__ == '__main__':

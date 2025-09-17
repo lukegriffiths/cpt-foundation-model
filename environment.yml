@@ -32,6 +32,11 @@ dependencies:
   # Optional but recommended for Transformer models
   - transformers
 
+  # Conda dependencies for MLflow ecosystem
+  - pyyaml
+  - joblib
+  - tqdm
+
   # Pip dependencies for installing PyTorch for CUDA 12.8
   - pip:
     # First, specify the repository URL
@@ -41,3 +46,7 @@ dependencies:
     - torch
     - torchvision
     - torchaudio
+
+    # tracking
+    - mlflow
+    

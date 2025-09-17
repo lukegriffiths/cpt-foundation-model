@@ -1,0 +1,14 @@
+
+# Example MLflow configuration additions for your config file:
+
+# Add these to your training_params section:
+training_params:
+  # ... your existing params ...
+  
+  # MLflow experiment tracking
+  experiment_name: 'cpt-foundation-experiments'  # Custom experiment name
+  run_name: null  # Will auto-generate if null
+  mlflow_tracking_uri: null  # Uses local ./mlruns if null
+  log_model_frequency: 10  # Log model every N epochs
+  create_plots: true  # Generate training plots
+  export_metrics: true  # Export metrics to CSV
