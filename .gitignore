@@ -9,3 +9,4 @@ models
 results
 .vscode/
 mlruns/
+plots/
