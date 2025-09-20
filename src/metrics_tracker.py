@@ -201,30 +201,35 @@ class CPTMetricsTracker:
     
     def log_model_checkpoint(self, model: torch.nn.Module, 
                            checkpoint_path: str, 
-                           is_best: bool = False):
+                           is_best: bool = False,
+                           input_example: Optional[torch.Tensor] = None):
         """
         Log model checkpoint to MLflow.
         
         Args:
-            model: PyTorch model to save
-            checkpoint_path: Local path where checkpoint is saved
+            model: The PyTorch model
+            checkpoint_path: Path to the saved model checkpoint
             is_best: Whether this is the best model so far
+            input_example: An example input tensor for model signature inference
         """
-        # Log the model file as artifact
+        # Log the raw checkpoint file
         mlflow.log_artifact(checkpoint_path, "checkpoints")
+
+        # Log the model using MLflow's PyTorch integration
+        model_name = "best_model" if is_best else f"checkpoint_epoch_{self.current_epoch}"
         
-        # If this is the best model, also register it (simplified to avoid warnings)
-        if is_best:
-            try:
-                mlflow.pytorch.log_model(
-                    model, 
-                    artifact_path="best_model",
-                    registered_model_name=f"{self.experiment_name}_best"
-                )
-            except Exception as e:
-                print(f"Warning: Could not log model: {e}")
-            
-            mlflow.log_metric("best_model_epoch", self.current_epoch)
+        try:
+            mlflow.pytorch.log_model(
+                pytorch_model=model,
+                artifact_path=model_name, # MLflow uses this as the directory name
+                signature=mlflow.models.infer_signature(input_example) if input_example is not None else None,
+                input_example=input_example,
+                registered_model_name=f"{self.experiment_name}_best" if is_best else None
+            )
+            if is_best:
+                print(f"Best model logged as '{model_name}' and registered as '{self.experiment_name}_best'")
+        except Exception as e:
+            print(f"Warning: Could not log model to MLflow: {e}")
     
     def create_training_plots(self, save_dir: str = "plots"):
         """
@@ -357,28 +362,40 @@ class CPTMetricsTracker:
         print(f"Fine-tuning plots saved to {plot_path}")
     
     def export_metrics_csv(self, filepath: str = "training_metrics.csv"):
-        """Export metrics to CSV file."""
+        """Export metrics to CSV file, handling potentially uneven metric list lengths."""
         if not self.metrics_history['train_loss']:
+            print("No metrics to export.")
             return
-            
-        # Convert metrics history to DataFrame
-        max_len = len(self.metrics_history['train_loss'])
-        
-        # Create DataFrame with train_loss as base
-        df_data = {
-            'epoch': list(range(1, max_len + 1)),
-            'train_loss': self.metrics_history['train_loss'],
-            'learning_rate': self.metrics_history['learning_rate'][:max_len],
-            'mask_ratio': self.metrics_history['mask_ratio'][:max_len]
-        }
-        
-        df = pd.DataFrame(df_data)
-        df.to_csv(filepath, index=False)
-        
-        # Log CSV to MLflow
-        mlflow.log_artifact(filepath, "metrics")
-        
-        print(f"Metrics exported to {filepath}")
+
+        # Determine the maximum length, which corresponds to the number of epochs logged.
+        max_len = 0
+        for key, value in self.metrics_history.items():
+            if isinstance(value, list):
+                max_len = max(max_len, len(value))
+
+        if max_len == 0:
+            print("No metric data points to export.")
+            return
+
+        df_data = {'epoch': list(range(1, max_len + 1))}
+
+        # Build the DataFrame, padding any short lists with NaN to ensure alignment.
+        for key, value in self.metrics_history.items():
+            if isinstance(value, list) and len(value) > 0:
+                # Create a full-length list padded with NaN
+                padded_list = value + [np.nan] * (max_len - len(value))
+                df_data[key] = padded_list
+
+        try:
+            df = pd.DataFrame(df_data)
+            df.to_csv(filepath, index=False)
+            mlflow.log_artifact(filepath, "metrics")
+            print(f"Metrics exported to {filepath}")
+        except ValueError as e:
+            print(f"Error creating DataFrame for CSV export: {e}")
+            print("Collected metric lengths:")
+            for key, value in df_data.items():
+                print(f"  - {key}: {len(value)}")
     
     def log_final_summary(self, best_val_loss: float, total_epochs: int):
         """Log final training summary."""

@@ -405,7 +405,9 @@ def finetune(config: dict):
     metrics_tracker.export_metrics_csv("finetune_metrics.csv")
     # Log the trained model
     try:
-        metrics_tracker.log_model_checkpoint(model, save_path, is_best=True)
+        # Get a sample input from the dataloader for signature inference
+        sample_features, _, _ = next(iter(val_loader))
+        metrics_tracker.log_model_checkpoint(model, save_path, is_best=True, input_example=sample_features.to(device))
     except Exception as e:
         print(f"Warning: Could not log model to MLflow: {e}")
     metrics_tracker.end_run()
