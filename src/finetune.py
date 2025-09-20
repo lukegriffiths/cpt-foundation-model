@@ -5,12 +5,15 @@ import torch
 import torch.nn as nn
 import pandas as pd
 import numpy as np
+import time
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
+import mlflow
 
 # Import your modules
 from model import CPTFoundationModel, IcPredictionModel
+from metrics_tracker import CPTMetricsTracker, get_gpu_memory_usage
 
 
 class CPTFineTuneDataset(Dataset):
@@ -112,6 +115,33 @@ def finetune(config: dict):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    # Initialize metrics tracker
+    metrics_tracker = CPTMetricsTracker(experiment_name="cpt-finetuning", run_name="ic_prediction")
+    
+    # Start MLflow run and log configuration
+    metrics_tracker.start_run(config)
+    
+    # Log system and device information using tracker
+    if torch.cuda.is_available():
+        gpu_memory_mb = get_gpu_memory_usage()
+        gpu_memory_gb = gpu_memory_mb / 1024
+        metrics_tracker.log_finetune_metrics(
+            epoch=0,
+            train_loss=0,
+            val_loss=0,
+            val_mae=0,
+            val_rmse=0,
+            learning_rate=0,
+            epoch_time=0,
+            gpu_memory_gb=gpu_memory_gb
+        )
+        print(f"GPU Memory Used: {gpu_memory_gb:.2f} GB")
+    metrics_tracker.log_param("device", str(device))
+    metrics_tracker.log_param("cuda_available", torch.cuda.is_available())
+    if torch.cuda.is_available():
+        metrics_tracker.log_param("gpu_name", torch.cuda.get_device_name())
+        metrics_tracker.log_param("gpu_count", torch.cuda.device_count())
+    
     # Extract configuration
     paths = config['data_paths']
     foundation_params = config['foundation_model_params']
@@ -157,6 +187,11 @@ def finetune(config: dict):
     print(f"Trainable parameters (regression head): {trainable_params:,}")
     print(f"Frozen parameters (foundation): {total_params - trainable_params:,}")
     
+    # Log model parameters to MLflow using tracker
+    metrics_tracker.log_param("total_params", total_params)
+    metrics_tracker.log_param("trainable_params", trainable_params)
+    metrics_tracker.log_param("frozen_params", total_params - trainable_params)
+    
     # --- 3. Load labels ---
     print("\nLoading labels...")
     labels_df = pd.read_csv(paths['labels_file'])
@@ -196,6 +231,12 @@ def finetune(config: dict):
     print(f"Training batches: {len(train_loader)}")
     print(f"Validation batches: {len(val_loader)}")
     
+    # Log dataset information using tracker
+    metrics_tracker.log_param("train_size", len(train_dataset))
+    metrics_tracker.log_param("val_size", len(val_dataset))
+    metrics_tracker.log_param("train_batches", len(train_loader))
+    metrics_tracker.log_param("val_batches", len(val_loader))
+    
     # --- 5. Setup training ---
     learning_rate = finetune_params['learning_rate']
     num_epochs = finetune_params['num_epochs']
@@ -223,7 +264,7 @@ def finetune(config: dict):
     
     # Learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3, verbose=True
+        optimizer, mode='min', factor=0.5, patience=3,
     )
     
     # --- 6. Training loop ---
@@ -235,6 +276,8 @@ def finetune(config: dict):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
     for epoch in range(num_epochs):
+        epoch_start_time = time.time()
+        
         # Training
         model.train()
         train_loss = 0
@@ -310,11 +353,33 @@ def finetune(config: dict):
         else:
             mae = rmse = float('inf')
         
+        epoch_time = time.time() - epoch_start_time
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        # Log metrics to MLflow using the tracker
+        gpu_memory_gb = None
+        if torch.cuda.is_available():
+            gpu_memory_mb = get_gpu_memory_usage()
+            gpu_memory_gb = gpu_memory_mb / 1024
+        
+        metrics_tracker.log_finetune_metrics(
+            epoch=epoch + 1,
+            train_loss=avg_train_loss,
+            val_loss=avg_val_loss,
+            val_mae=mae,
+            val_rmse=rmse,
+            learning_rate=current_lr,
+            epoch_time=epoch_time,
+            gpu_memory_gb=gpu_memory_gb
+        )
+        
         print(f"\nEpoch {epoch+1}/{num_epochs}")
         print(f"  Train Loss (MSE): {avg_train_loss:.6f}")
         print(f"  Val Loss (MSE): {avg_val_loss:.6f}")
         print(f"  Val MAE: {mae:.4f}")
         print(f"  Val RMSE: {rmse:.4f}")
+        print(f"  Learning Rate: {current_lr:.2e}")
+        print(f"  Epoch Time: {epoch_time:.1f}s")
         
         # Update learning rate
         scheduler.step(avg_val_loss)
@@ -334,10 +399,22 @@ def finetune(config: dict):
             }, save_path)
             print(f"  ✓ Saved best model with validation loss: {best_val_loss:.6f}")
     
+    # Log final summary, plots, and metrics using tracker
+    metrics_tracker.log_final_summary(best_val_loss, num_epochs)
+    metrics_tracker.create_finetune_plots()
+    metrics_tracker.export_metrics_csv("finetune_metrics.csv")
+    # Log the trained model
+    try:
+        metrics_tracker.log_model_checkpoint(model, save_path, is_best=True)
+    except Exception as e:
+        print(f"Warning: Could not log model to MLflow: {e}")
+    metrics_tracker.end_run()
+    
     print(f"\n{'='*50}")
     print(f"Fine-tuning complete!")
     print(f"Best validation loss: {best_val_loss:.6f}")
     print(f"Model saved to: {save_path}")
+    print(f"MLflow run completed. View results with: mlflow ui")
     print(f"{'='*50}")
 
 

@@ -12,6 +12,10 @@ https://www.tugraz.at/en/institutes/ibg/research/computational-geotechnics-group
 
 Oberhollenzer S., Premstaller M., Marte R., Tschuchnigg F., Erharter G.H., Marcher T. (2020): CPT dataset Premstaller Geotechnik. Data in Brief.
 
+### TNW dataset
+
+https://datahub.pleio.nl/en/explorer?zone=5&chapter=3&study=5
+
 # To do
 
 Remove auto loading and chunking of data from datamodule.

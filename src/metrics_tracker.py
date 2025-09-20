@@ -21,6 +21,9 @@ import pandas as pd
 
 
 class CPTMetricsTracker:
+    def log_param(self, key: str, value: Any):
+        """Log a single parameter to MLflow."""
+        mlflow.log_param(key, value)
     """
     Comprehensive metrics tracking for CPT model training using MLflow.
     """
@@ -145,6 +148,57 @@ class CPTMetricsTracker:
         if gpu_memory_mb is not None:
             self.metrics_history['gpu_memory'].append(gpu_memory_mb)
     
+    def log_finetune_metrics(self, epoch: int, train_loss: float, val_loss: float,
+                           val_mae: float, val_rmse: float, learning_rate: float,
+                           epoch_time: Optional[float] = None,
+                           gpu_memory_gb: Optional[float] = None):
+        """
+        Log metrics for fine-tuning epoch.
+        
+        Args:
+            epoch: Current epoch number
+            train_loss: Training loss for this epoch
+            val_loss: Validation loss
+            val_mae: Validation mean absolute error
+            val_rmse: Validation root mean squared error
+            learning_rate: Current learning rate
+            epoch_time: Time taken for this epoch in seconds
+            gpu_memory_gb: GPU memory usage in GB
+        """
+        self.current_epoch = epoch
+        
+        # Log to MLflow
+        mlflow.log_metric("train_loss", train_loss, step=epoch)
+        mlflow.log_metric("val_loss", val_loss, step=epoch)
+        mlflow.log_metric("val_mae", val_mae, step=epoch)
+        mlflow.log_metric("val_rmse", val_rmse, step=epoch)
+        mlflow.log_metric("learning_rate", learning_rate, step=epoch)
+        
+        if epoch_time is not None:
+            mlflow.log_metric("epoch_time", epoch_time, step=epoch)
+            
+        if gpu_memory_gb is not None:
+            mlflow.log_metric("gpu_memory_gb", gpu_memory_gb, step=epoch)
+        
+        # Store in history for plotting
+        if 'val_mae' not in self.metrics_history:
+            self.metrics_history['val_mae'] = []
+        if 'val_rmse' not in self.metrics_history:
+            self.metrics_history['val_rmse'] = []
+            
+        self.metrics_history['train_loss'].append(train_loss)
+        self.metrics_history['val_loss'].append(val_loss)
+        self.metrics_history['val_mae'].append(val_mae)
+        self.metrics_history['val_rmse'].append(val_rmse)
+        self.metrics_history['learning_rate'].append(learning_rate)
+        
+        if epoch_time is not None:
+            self.metrics_history['epoch_time'].append(epoch_time)
+        if gpu_memory_gb is not None:
+            if 'gpu_memory_gb' not in self.metrics_history:
+                self.metrics_history['gpu_memory_gb'] = []
+            self.metrics_history['gpu_memory_gb'].append(gpu_memory_gb)
+    
     def log_model_checkpoint(self, model: torch.nn.Module, 
                            checkpoint_path: str, 
                            is_best: bool = False):
@@ -245,6 +299,62 @@ class CPTMetricsTracker:
         
         # Log to MLflow
         mlflow.log_artifact(lr_plot_path, "plots")
+    
+    def create_finetune_plots(self, save_dir: str = "plots"):
+        """
+        Create plots specific to fine-tuning metrics.
+        
+        Args:
+            save_dir: Directory to save plot files
+        """
+        if not self.metrics_history['train_loss']:
+            return
+            
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Create a comprehensive fine-tuning plot
+        plt.figure(figsize=(15, 5))
+        
+        # Loss plot
+        plt.subplot(1, 3, 1)
+        epochs = range(1, len(self.metrics_history['train_loss']) + 1)
+        plt.plot(epochs, self.metrics_history['train_loss'], 'b-', label='Train Loss', linewidth=2)
+        plt.plot(epochs, self.metrics_history['val_loss'], 'r-', label='Val Loss', linewidth=2)
+        plt.xlabel('Epoch')
+        plt.ylabel('MSE Loss')
+        plt.title('Fine-tuning Loss')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # MAE and RMSE plot
+        plt.subplot(1, 3, 2)
+        if 'val_mae' in self.metrics_history and self.metrics_history['val_mae']:
+            plt.plot(epochs, self.metrics_history['val_mae'], 'g-', label='Val MAE', linewidth=2)
+        if 'val_rmse' in self.metrics_history and self.metrics_history['val_rmse']:
+            plt.plot(epochs, self.metrics_history['val_rmse'], 'orange', label='Val RMSE', linewidth=2)
+        plt.xlabel('Epoch')
+        plt.ylabel('Error')
+        plt.title('Validation Metrics')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Learning rate plot
+        plt.subplot(1, 3, 3)
+        plt.plot(epochs, self.metrics_history['learning_rate'], 'm-', linewidth=2)
+        plt.xlabel('Epoch')
+        plt.ylabel('Learning Rate')
+        plt.title('Learning Rate Schedule')
+        plt.yscale('log')
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plot_path = os.path.join(save_dir, 'finetune_metrics.png')
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Log to MLflow
+        mlflow.log_artifact(plot_path, "plots")
+        print(f"Fine-tuning plots saved to {plot_path}")
     
     def export_metrics_csv(self, filepath: str = "training_metrics.csv"):
         """Export metrics to CSV file."""

@@ -49,4 +49,7 @@ dependencies:
 
     # tracking
     - mlflow
+
+    # CPT IO
+    - lasio
     

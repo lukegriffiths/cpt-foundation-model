@@ -25,7 +25,7 @@ model_params:
 training_params:
   batch_size: 32         # Increased from 16 - leverage GPU memory for faster training
   learning_rate: 0.0002  # Increased from 0.0001 - higher LR with larger batches
-  num_epochs: 200        # Reduced from 300 - larger batches train faster
+  num_epochs: 500        # Reduced from 300 - larger batches train faster
   max_len: 1024          # Increased from 512 - GPU can handle longer sequences
   overlap: 256           # Increased from 128 - better context with longer sequences
   mask_ratio: 0.15       # Reduced from 0.2 - more conservative for better learning
